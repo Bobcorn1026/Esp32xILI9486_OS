@@ -1,263 +1,232 @@
-// Sketch to display images on a 480 x 320 ILI9486 Raspberry Pi 3.5" TFT (Waveshare design)
-// which has a 16-bit serial interface based on 74HC04, 74HC4040 and 2 x 74HC4094 logic chips
 
-// Renders images stored in an array in program (FLASH)JPEG images are stored in header files
-// (see jpeg1.h etc.)
+// This example renders a png file that is stored in a FLASH array
+// using the PNGdec library (available via library manager).
 
-// The sketch does not need the SD or sdFat libraries since it does not access an SD Card.
+// Note: The PNGDEC required lots of RAM to work (~40kbytes) so
+// this sketch is will not run on smaller memory processors (e.g.
+// ESP8266, STM32F103 etc.)
 
-// As well as the TFT_eSPI library:
-// https://github.com/Bodmer/TFT_eSPI
-// the sketch need the JPEG Decoder library. This can be loaded via the Library Manager.
-// or can be downloaded here:
-// https://github.com/Bodmer/JPEGDecoder
+// The example png is encoded as ARGB 8 bits per pixel with indexed colour
+// It was created using GIMP and has a transparent background area.
 
-//----------------------------------------------------------------------------------------------------
-#include <Arduino.h>
-#include <SPI.h>
-#include <TFT_eSPI.h>
+// Image files can be converted to arrays using the tool here:
+// https://notisrac.github.io/FileToCArray/
+// To use this tool:
+//   1. Drag and drop PNG image file on "Browse..." button
+//   2. Tick box "Treat as binary"
+//   3. Click "Convert"
+//   4. Click "Save as file" and move the header file to sketch folder
+//      (alternatively use the "Copy to clipboard" and paste into a new tab)
+//   5. Open the sketch in IDE
+//   6. Include the header file containing the array (SpongeBob.h in this example)
 
-TFT_eSPI tft = TFT_eSPI();
+// Include the PNG decoder library, available via the IDE library manager
+#include <PNGdec.h>
 
+// Include image array
+#include "HomeScreenIcons.h"
 
-#define TFT_DC   18  // Data Command control pin - must use a pin in the range 0-31  (LCD_RS on my display)
-#define TFT_CS   33  // Chip select control pin
-#define TFT_RST  32  // Reset pin
-#define TFT_RD    2
-#define TFT_WR    4  // Write strobe control pin - must use a pin in the range 0-31
+PNG png; // PNG decoder instance
 
-#define TFT_D0   12  // Must use pins in the range 0-31 for the data bus
-#define TFT_D1   13  // so a single register write sets/clears all bits
-#define TFT_D2   26
-#define TFT_D3   25
-#define TFT_D4   21
-#define TFT_D5   5
-#define TFT_D6   27
-#define TFT_D7   14
+#define MAX_IMAGE_WIDTH 480 // Sets rendering line buffer lengths, adjust for your images
 
-// JPEG decoder library
-#include <JPEGDecoder.h>
+// Include the TFT library - see https://github.com/Bodmer/TFT_eSPI for library information
+#include "SPI.h"
+#include <TFT_eSPI.h>              // Hardware-specific library
+TFT_eSPI tft = TFT_eSPI();         // Invoke custom library
 
-// Return the minimum of two values a and b
-#define minimum(a,b)     (((a) < (b)) ? (a) : (b))
+// Position variables must be global (PNGdec does not handle position coordinates)
+int16_t xpos = 0;
+int16_t ypos = 0;
+int16_t DefaultBGColor = 0xC5D6;
+int16_t CurrentPage = 0, Selected = 0;
+int RectPosX[6] = {32, 182, 332, 32, 182, 332};
+int RectPosY[6] = {50, 50, 50, 190, 190, 190};
+int IconPosX[6] = {50, 200, 350, 50, 200, 350};
+int IconPosY[6] = {65, 65, 65, 205, 205, 205};
+bool OneTimeRunner = false;
+int SettingPTR = 0, SettingSelected = 0;
+String SettingInfo[8] = {"Random Text", "Random Text", "Random Text", "Random Text", "Random Text", "Random Text", "Random Text", "Random Text"};
+//====================================================================================
+//                                    Setup
+//====================================================================================
+void setup()
+{
+  Serial.begin(115200);
+  Serial.println("\n\n Using the PNGdec library");
 
-// Include the sketch header file that contains the image stored as an array of bytes
-// More than one image array could be stored in each header file.
-#include "jpeg1.h"
-#include "jpeg2.h"
-#include "jpeg3.h"
-#include "jpeg.h"
+  // Initialise the TFT
+  tft.begin();
+  tft.fillScreen(TFT_BLACK);
 
-// Count how many times the image is drawn for test purposes
-uint32_t icount = 0;
-//----------------------------------------------------------------------------------------------------
-void jpegInfo() {
-  Serial.println(F("==============="));
-  Serial.println(F("JPEG image info"));
-  Serial.println(F("==============="));
-  Serial.print(F(  "Width      :")); Serial.println(JpegDec.width);
-  Serial.print(F(  "Height     :")); Serial.println(JpegDec.height);
-  Serial.print(F(  "Components :")); Serial.println(JpegDec.comps);
-  Serial.print(F(  "MCU / row  :")); Serial.println(JpegDec.MCUSPerRow);
-  Serial.print(F(  "MCU / col  :")); Serial.println(JpegDec.MCUSPerCol);
-  Serial.print(F(  "Scan type  :")); Serial.println(JpegDec.scanType);
-  Serial.print(F(  "MCU width  :")); Serial.println(JpegDec.MCUWidth);
-  Serial.print(F(  "MCU height :")); Serial.println(JpegDec.MCUHeight);
-  Serial.println(F("==============="));
+  Serial.println("\r\nInitialisation done.");
+  
 }
 
-void renderJPEG(int xpos, int ypos) {
 
-  // retrieve information about the image
-  uint16_t *pImg;
-  uint16_t mcu_w = JpegDec.MCUWidth;
-  uint16_t mcu_h = JpegDec.MCUHeight;
-  uint32_t max_x = JpegDec.width;
-  uint32_t max_y = JpegDec.height;
+void pngDraw(PNGDRAW *pDraw) {
+  uint16_t lineBuffer[MAX_IMAGE_WIDTH];          // Line buffer for rendering
+  uint8_t  maskBuffer[1 + MAX_IMAGE_WIDTH / 8];  // Mask buffer
 
-  // Jpeg images are draw as a set of image block (tiles) called Minimum Coding Units (MCUs)
-  // Typically these MCUs are 16x16 pixel blocks
-  // Determine the width and height of the right and bottom edge image blocks
-  uint32_t min_w = minimum(mcu_w, max_x % mcu_w);
-  uint32_t min_h = minimum(mcu_h, max_y % mcu_h);
+  png.getLineAsRGB565(pDraw, lineBuffer, PNG_RGB565_BIG_ENDIAN, 0xffffffff);
 
-  // save the current image block size
-  uint32_t win_w = mcu_w;
-  uint32_t win_h = mcu_h;
+  if (png.getAlphaMask(pDraw, maskBuffer, 255)) {
+    // Note: pushMaskedImage is for pushing to the TFT and will not work pushing into a sprite
+    tft.pushMaskedImage(xpos, ypos + pDraw->y, pDraw->iWidth, 1, lineBuffer, maskBuffer);
+  }
+}
 
-  // record the current time so we can measure how long it takes to draw an image
-  uint32_t drawTime = millis();
+//====================================================================================
+//                                    HomeScreenReset
+//====================================================================================
 
-  // save the coordinate of the right and bottom edges to assist image cropping
-  // to the screen size
-  max_x += xpos;
-  max_y += ypos;
-
-  // read each MCU block until there are no more
-  while (JpegDec.read()) {
-	  
-    // save a pointer to the image block
-    pImg = JpegDec.pImage ;
-
-    // calculate where the image block should be drawn on the screen
-    int mcu_x = JpegDec.MCUx * mcu_w + xpos;  // Calculate coordinates of top left corner of current MCU
-    int mcu_y = JpegDec.MCUy * mcu_h + ypos;
-
-    // check if the image block size needs to be changed for the right edge
-    if (mcu_x + mcu_w <= max_x) win_w = mcu_w;
-    else win_w = min_w;
-
-    // check if the image block size needs to be changed for the bottom edge
-    if (mcu_y + mcu_h <= max_y) win_h = mcu_h;
-    else win_h = min_h;
-
-    // copy pixels into a contiguous block
-    if (win_w != mcu_w)
-    {
-      uint16_t *cImg;
-      int p = 0;
-      cImg = pImg + win_w;
-      for (int h = 1; h < win_h; h++)
-      {
-        p += mcu_w;
-        for (int w = 0; w < win_w; w++)
-        {
-          *cImg = *(pImg + w + p);
-          cImg++;
-        }
-      }
-    }
-
-    // calculate how many pixels must be drawn
-    uint32_t mcu_pixels = win_w * win_h;
-
+void HomeScreenReset() {
+  CurrentPage = 0; Selected = 0;
+  tft.fillScreen(DefaultBGColor);
+  tft.drawLine(0, 30, 480, 30, TFT_BLACK);
+  xpos = 50; ypos = 65;
+  int16_t rc = png.openFLASH((uint8_t *)Home_Icon, sizeof(Home_Icon), pngDraw);
+  if (rc == PNG_SUCCESS) {
+    Serial.println("Successfully opened png file");
     tft.startWrite();
-
-    // draw image MCU block only if it will fit on the screen
-    if (( mcu_x + win_w ) <= tft.width() && ( mcu_y + win_h ) <= tft.height())
-    {
-
-      // Now set a MCU bounding window on the TFT to push pixels into (x, y, x + width - 1, y + height - 1)
-      tft.setAddrWindow(mcu_x, mcu_y, win_w, win_h);
-
-      // Write all MCU pixels to the TFT window
-      while (mcu_pixels--) {
-        // Push each pixel to the TFT MCU area
-        tft.pushColor(*pImg++);
-      }
-
-    }
-    else if ( (mcu_y + win_h) >= tft.height()) JpegDec.abort(); // Image has run off bottom of screen so abort decoding
-
+    rc = png.decode(NULL, 0);
+    tft.endWrite();
+  }
+  xpos += 150;
+  int16_t ac = png.openFLASH((uint8_t *)Clock_Icon, sizeof(Clock_Icon), pngDraw);
+  if (ac == PNG_SUCCESS) {
+    Serial.println("Successfully opened png file");
+    tft.startWrite();
+    ac = png.decode(NULL, 0);
+    tft.endWrite();
+  }
+  xpos += 150;
+  int16_t bc = png.openFLASH((uint8_t *)Settings_Icon, sizeof(Settings_Icon), pngDraw);
+  if (bc == PNG_SUCCESS) {
+    Serial.println("Successfully opened png file");
+    tft.startWrite();
+    bc = png.decode(NULL, 0);
     tft.endWrite();
   }
 
-  // calculate how long it took to draw the image
-  drawTime = millis() - drawTime;
+  xpos = 50; ypos = 205;
 
-  // print the results to the serial port
-  Serial.print(F(  "Total render time was    : ")); Serial.print(drawTime); Serial.println(F(" ms"));
-  Serial.println(F(""));
+    int16_t cc = png.openFLASH((uint8_t *)TrashIcon1, sizeof(TrashIcon1), pngDraw);
+  if (cc == PNG_SUCCESS) {
+    Serial.println("Successfully opened png file");
+    tft.startWrite();
+    cc = png.decode(NULL, 0);
+    tft.endWrite();
+  }
+  xpos += 150;
+  int16_t dc = png.openFLASH((uint8_t *)TrashIcon2, sizeof(TrashIcon2), pngDraw);
+  if (dc == PNG_SUCCESS) {
+    Serial.println("Successfully opened png file");
+    tft.startWrite();
+    dc = png.decode(NULL, 0);
+    tft.endWrite();
+  }
+  xpos += 150;
+  int16_t ec = png.openFLASH((uint8_t *)TrashIcon2, sizeof(TrashIcon2), pngDraw);
+  if (ec == PNG_SUCCESS) {
+    Serial.println("Successfully opened png file");
+    tft.startWrite();
+    ec = png.decode(NULL, 0);
+    tft.endWrite();
+  }
+}
+
+void ClearSection(int16_t Section) {
+  tft.drawRoundRect(RectPosX[Section], RectPosY[Section], 100, 100, 20, DefaultBGColor);
+}
+
+void SettingBooting() {
+  SettingPTR = 0; SettingSelected = 0;
+  tft.fillScreen(DefaultBGColor);
+  tft.drawLine(0, 30, 480, 30, TFT_BLACK);
+  for (int i = 70; i < 320; i += 50) {
+    tft.drawWideLine(0, i, 480, i, 5, TFT_BLACK, TFT_BLUE);
+  }
+  tft.setCursor(160,45);
+  tft.setTextColor(TFT_BLACK, TFT_BLACK, false);
+  tft.setTextSize(2);
+  tft.drawString("Hello, World!", 10, 10);
+}
+
+//====================================================================================
+//                                    InputDetect
+//====================================================================================
+
+void InputDetect(String input) {
+  int16_t UpdatedIcon[2] = {Selected, Selected};
+  if (input == "8") {
+    if (CurrentPage == 0) {
+      if (Selected-3 >= 0) {
+        Selected -= 3;
+        UpdatedIcon[1] = Selected;
+      }
+    }
+  }
+  if (input == "4") {
+    if (CurrentPage == 0){
+      if (Selected-1 >= 0) {
+        Selected -= 1;
+        UpdatedIcon[1] = Selected;
+      }
+    }
+  }
+  if (input == "6") {
+    if (CurrentPage == 0) {
+      if (Selected+1 <= 5) {
+        Selected += 1;
+        UpdatedIcon[1] = Selected;
+      }
+    }
+  }
+  if (input == "2") {
+    if (CurrentPage == 0) {
+      if (Selected+3 <= 5) {
+        Selected += 3;
+        UpdatedIcon[1] = Selected;
+      }
+    }
+  }
+  if (input == "5") {
+    if (CurrentPage == 0 && Selected == 2) {
+    ClearSection(UpdatedIcon[0]);
+    CurrentPage = 12;
+    SettingBooting();
+    
+  }
+    }
+  if (input == "-1") {
+    HomeScreenReset();
+  }
+  if (CurrentPage == 0) {
+    ClearSection(UpdatedIcon[0]);
+    tft.drawRoundRect(RectPosX[UpdatedIcon[1]], RectPosY[UpdatedIcon[1]], 100, 100, 20, TFT_BLACK);
+  }
 }
 
 
-void drawArrayJpeg(const uint8_t arrayname[], uint32_t array_size, int xpos, int ypos) {
+//====================================================================================
+//                                    Loop
+//====================================================================================
 
-  int x = xpos;
-  int y = ypos;
+void loop()
+{
+  if (!OneTimeRunner) {
+    tft.setRotation(1);
+    HomeScreenReset();
+    OneTimeRunner = true;
+  }
+  InputDetect(Serial.readString());
+  tft.setCursor(160,45);
+  tft.setTextColor(TFT_BLACK, TFT_BLACK, false);
+  tft.setTextSize(2);
+  tft.setTextFont(2);
+  tft.drawString("Hello, World!", 10, 10);
 
-  JpegDec.decodeArray(arrayname, array_size);
-  
-  jpegInfo(); // Print information from the JPEG file (could comment this line out)
-  
-  renderJPEG(x, y);
-  
-  Serial.println("#########################");
+  delay(50);
+
 }
-
-//####################################################################################################
-// Setup
-//####################################################################################################
-void setup() {
-  Serial.begin(115200);
-  tft.init();
-}
-
-//####################################################################################################
-// Main loop
-//####################################################################################################
-void loop() {
-
-  tft.setRotation(2);  // portrait
-  tft.fillScreen(random(0xFFFF));
-
-  // The image is 300 x 300 pixels so we do some sums to position image in the middle of the screen!
-  // Doing this by reading the image width and height from the jpeg info is left as an exercise!
-  int x = (tft.width()  - 300) / 2 - 1;
-  int y = (tft.height() - 480) / 2 - 1;
-/*
-  tft.setRotation(2);
-  tft.fillScreen(random(0xFFFF));
-  drawArrayJpeg(EagleEye, sizeof(EagleEye), 0, 0); // Draw a jpeg image stored in memory, test cropping
-  delay(1000);
-
-  tft.setRotation(2);  // portrait
-  tft.fillScreen(random(0xFFFF));
-  drawArrayJpeg(sean, sizeof(sean), 0, 0); // Draw a jpeg image stored in memory
-  delay(5000);
-
-
-  tft.setRotation(2);  // portrait
-  tft.fillScreen(random(0xFFFF));
-  drawArrayJpeg(lena20k, sizeof(lena20k), 0, 0); // Draw a jpeg image stored in memory
-  delay(2000);
-
-  tft.setRotation(1);  // landscape
-  tft.fillScreen(random(0xFFFF));
-*/
-  // This image will be deliberately cropped as it is 480 x 320 thes extends off the screen when plotted
-  // at coordinate 100,100
-  tft.setRotation(2);  // portrait
-  drawArrayJpeg(mkjpg, sizeof(mkjpg), 0, 0); // Draw a jpeg image stored in memory, test cropping
-  //drawArrayJpeg(Mouse480, sizeof(Mouse480), 0, 0); // Draw a jpeg image stored in memory
-  delay(300000);
-  
-}
-
-//####################################################################################################
-// Draw a JPEG on the TFT pulled from a program memory array
-//####################################################################################################
-
-//####################################################################################################
-// Draw a JPEG on the TFT, images will be cropped on the right/bottom sides if they do not fit
-//####################################################################################################
-// This function assumes xpos,ypos is a valid screen coordinate. For convenience images that do not
-// fit totally on the screen are cropped to the nearest MCU size and may leave right/bottom borders.
-
-
-//####################################################################################################
-// Print image information to the serial port (optional)
-//####################################################################################################
-
-
-//####################################################################################################
-// Show the execution time (optional)
-//####################################################################################################
-// WARNING: for UNO/AVR legacy reasons printing text to the screen with the Mega might not work for
-// sketch sizes greater than ~70KBytes because 16-bit address pointers are used in some libraries.
-
-// The Due will work fine with the HX8357_Due library.
-
-void showTime(uint32_t msTime) {
-  //tft.setCursor(0, 0);
-  //tft.setTextFont(1);
-  //tft.setTextSize(2);
-  //tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  //tft.print(F(" JPEG drawn in "));
-  //tft.print(msTime);
-  //tft.println(F(" ms "));
-  Serial.print(F(" JPEG drawn in "));
-  Serial.print(msTime);
-  Serial.println(F(" ms "));
-}
-
