@@ -1,4 +1,4 @@
-這份文件是基於Bodmer的 [TFT_eSPI](https://github.com/Bodmer/TFT_eSPI) 所製作的
+這份專案是基於Bodmer的 [TFT_eSPI](https://github.com/Bodmer/TFT_eSPI) 所製作的
 # 預計實裝内容:
 ## 可視化OS
 ### 狀態欄:
