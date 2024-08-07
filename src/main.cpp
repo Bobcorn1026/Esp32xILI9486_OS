@@ -1,4 +1,3 @@
-
 // This example renders a png file that is stored in a FLASH array
 // using the PNGdec library (available via library manager).
 
@@ -87,7 +86,8 @@ void HomeScreenReset() {
   xpos = 50; ypos = 65;
   int16_t rc = png.openFLASH((uint8_t *)Home_Icon, sizeof(Home_Icon), pngDraw);
   if (rc == PNG_SUCCESS) {
-    Serial.println("Successfully opened png file");
+    Serial.print("Successfully opened png file ");
+    Serial.println("Home_Icon");
     tft.startWrite();
     rc = png.decode(NULL, 0);
     tft.endWrite();
@@ -95,7 +95,8 @@ void HomeScreenReset() {
   xpos += 150;
   int16_t ac = png.openFLASH((uint8_t *)Clock_Icon, sizeof(Clock_Icon), pngDraw);
   if (ac == PNG_SUCCESS) {
-    Serial.println("Successfully opened png file");
+    Serial.print("Successfully opened png file ");
+    Serial.println("Clock_Icon");
     tft.startWrite();
     ac = png.decode(NULL, 0);
     tft.endWrite();
@@ -103,7 +104,8 @@ void HomeScreenReset() {
   xpos += 150;
   int16_t bc = png.openFLASH((uint8_t *)Settings_Icon, sizeof(Settings_Icon), pngDraw);
   if (bc == PNG_SUCCESS) {
-    Serial.println("Successfully opened png file");
+    Serial.print("Successfully opened png file ");
+    Serial.println("Settings_Icon");
     tft.startWrite();
     bc = png.decode(NULL, 0);
     tft.endWrite();
@@ -135,8 +137,8 @@ void HomeScreenReset() {
     tft.endWrite();
   }
 }
-
-void ClearSection(int16_t Section) {
+/*畫個長方形在指定區域*/
+void ClearSection(int16_t Section) { 
   tft.drawRoundRect(RectPosX[Section], RectPosY[Section], 100, 100, 20, DefaultBGColor);
 }
 
@@ -215,18 +217,13 @@ void InputDetect(String input) {
 
 void loop()
 {
-  if (!OneTimeRunner) {
+  if (!OneTimeRunner) { // only runs one time
     tft.setRotation(1);
     HomeScreenReset();
     OneTimeRunner = true;
   }
   InputDetect(Serial.readString());
   tft.setCursor(160,45);
-  tft.setTextColor(TFT_BLACK, TFT_BLACK, false);
-  tft.setTextSize(2);
-  tft.setTextFont(2);
-  tft.drawString("Hello, World!", 10, 10);
-
   delay(50);
 
 }
